@@ -26,47 +26,54 @@ docker exec ghostfolio curl -s http://br-fixed-income:8000/health
 ```
 
 The first start downloads about 15 MB; `/health` returns `"status": "ok"` once the data is loaded.
+If the government site is rate-limiting (HTTP 429), the service keeps retrying every hour until the
+first download succeeds; `/health` shows the last error meanwhile.
 
-Without cloning, swap `build: .` for `image: ghcr.io/avitaliano/ghostfolio-br-fixed-income:<version>`
-in `compose.yaml`.
+Without cloning, replace the `build: .` and `image: …` lines in `compose.yaml` with
+`image: ghcr.io/avitaliano/ghostfolio-br-fixed-income:<version>`.
 
 ## Add a bond to Ghostfolio
 
-1. Find the bond: `docker exec ghostfolio curl -s http://br-fixed-income:8000/tesouro/bonds`.
-   Each entry has the bond's `name`, exactly as on the Tesouro Direto site (e.g. `Tesouro IPCA+ 2035`),
-   and its `priceUrl`.
-2. **Admin Control → Market Data → + → Add Manually**: data source `MANUAL`, a symbol of your choice
-   (e.g. `TD-IPCA-2035`), currency `BRL`. Then open the asset and set **Name** to the `name` from step 1,
+Every bond has a **symbol derived from its name on the Tesouro Direto site**: lowercase, drop the
+`+`, spaces become `-`. `Tesouro IPCA+ 2035` → `tesouro-ipca-2035`, `Tesouro RendA+ Aposentadoria Extra 2065`
+→ `tesouro-renda-aposentadoria-extra-2065`. Use it as the Ghostfolio symbol and the URL writes itself.
+`/tesouro/bonds` lists every bond with its `symbol` and `priceUrl`.
+
+1. **Admin Control → Market Data → + → Add Manually**: data source `MANUAL`, symbol e.g.
+   `tesouro-ipca-2035`, currency `BRL`. Then open the asset and set **Name** `Tesouro IPCA+ 2035`,
    **Asset Class** `Fixed Income` and **Asset Sub Class** `Bond`.
-3. **Scraper Configuration** on that asset:
+2. **Scraper Configuration** on that asset:
 
    | Field | Value |
    |---|---|
-   | URL | `http://br-fixed-income:8000` + the `priceUrl`, e.g. `http://br-fixed-income:8000/tesouro/price/tesouro-ipca/2035-05-15` |
+   | URL | `http://br-fixed-income:8000/tesouro/price/<symbol>`, e.g. `http://br-fixed-income:8000/tesouro/price/tesouro-ipca-2035` |
    | Selector | `$.price` |
    | Locale | `en-US` |
    | Mode | `lazy` |
 
    Click **Test** (it shows today's price), then **Save**. Ghostfolio records the price daily from now on.
-4. **History, once:** fetch it and paste the output into the asset's **Historical Data** box.
+3. **History (optional):** for performance charts over time, paste the output into the asset's
+   **Historical Data** box. Not needed if you only care about the current value.
    ```sh
-   docker exec ghostfolio curl -s http://br-fixed-income:8000/tesouro/history/tesouro-ipca/2035-05-15
+   docker exec ghostfolio curl -s http://br-fixed-income:8000/tesouro/history/tesouro-ipca-2035
    ```
    Add `?from=2024-01-01` to limit it to the period you held the bond.
-5. Add your buy activities against that asset as usual (quantity = number of títulos, fractions allowed).
+4. Add your buy activities against that asset as usual (quantity = number of títulos, fractions allowed).
+   If you only track what you hold today, one Buy with your current quantity and average price is enough.
 
 ## API
 
 | Path | Returns |
 |---|---|
 | `GET /health` | `200 {"status":"ok","dataDate":…}`; `503` if no data yet or the data is older than `MAX_AGE_DAYS` |
-| `GET /tesouro/bonds` | every bond in the dataset (including matured ones) with `name`, `maturity`, `latestDate`, `price`, `priceUrl` |
-| `GET /tesouro/price/<slug>/<YYYY-MM-DD>` | `{"symbol","name","date","price"}`, the latest price |
-| `GET /tesouro/history/<slug>/<YYYY-MM-DD>[?from=YYYY-MM-DD]` | `date;marketPrice` lines, Ghostfolio's import format |
+| `GET /tesouro/bonds` | every bond in the dataset (including matured ones) with `symbol`, `name`, `maturity`, `latestDate`, `price`, `priceUrl` |
+| `GET /tesouro/price/<symbol>` | `{"symbol","name","date","price"}`, the latest price |
+| `GET /tesouro/history/<symbol>[?from=YYYY-MM-DD]` | `date;marketPrice` lines, Ghostfolio's import format |
 
-The slug is the bond type (`tesouro-selic`, `tesouro-ipca`, `tesouro-ipca-com-juros-semestrais`,
-`tesouro-prefixado`, `tesouro-prefixado-com-juros-semestrais`, `tesouro-renda-aposentadoria-extra`,
-`tesouro-educa`, `tesouro-igpm-com-juros-semestrais`). The date is the maturity date in the dataset.
+`<symbol>` is the name-derived symbol above. A few bonds that matured before 2014 share a name with
+another maturity in the same year; for those, the name URL answers `409` with the alternatives, and the
+long form `/tesouro/price/<type>/<maturity YYYY-MM-DD>` (e.g. `/tesouro/price/tesouro-ipca/2035-05-15`) works
+for every bond.
 
 ## What the price means
 
@@ -113,9 +120,10 @@ with all capabilities dropped.
 1. `git clone` este repositório e entre na pasta.
 2. `GHOSTFOLIO_NETWORK=<rede do seu Ghostfolio> docker compose up -d --build`
 3. Veja os títulos: `docker exec ghostfolio curl -s http://br-fixed-income:8000/tesouro/bonds`
-4. No Ghostfolio, crie um ativo MANUAL (BRL, Renda Fixa/Título) com *Scraper Configuration*: URL
-   `http://br-fixed-income:8000/tesouro/price/<slug>/<vencimento>`, seletor `$.price`, locale `en-US`.
-5. Cole o histórico de `/tesouro/history/<slug>/<vencimento>` em *Historical Data*.
+4. No Ghostfolio, crie um ativo MANUAL (BRL, Renda Fixa/Título) com símbolo derivado do nome do título
+   (`Tesouro IPCA+ 2035` → `tesouro-ipca-2035`) e *Scraper Configuration*: URL
+   `http://br-fixed-income:8000/tesouro/price/<símbolo>`, seletor `$.price`, locale `en-US`.
+5. Opcional: cole o histórico de `/tesouro/history/<símbolo>` em *Historical Data*.
 
 O preço é o PU de venda (bruto, sem IR/IOF/custódia), da base oficial do Tesouro Transparente.
 
