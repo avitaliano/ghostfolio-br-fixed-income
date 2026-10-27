@@ -36,9 +36,32 @@ class ServerTest(unittest.TestCase):
         status, kind, body = self.get("/tesouro/price/tesouro-ipca/2035-05-15")
         self.assertEqual((status, kind), (200, "application/json"))
         self.assertEqual(json.loads(body), {
-            "symbol": "tesouro-ipca/2035-05-15", "name": "Tesouro IPCA+ 2035",
+            "symbol": "tesouro-ipca-2035", "name": "Tesouro IPCA+ 2035",
             "date": "2026-10-24", "price": 3530.12,
         })
+
+    def test_price_and_history_by_name(self):
+        self.start(self.loaded())
+        status, _, body = self.get("/tesouro/price/tesouro-ipca-2035")
+        self.assertEqual((status, json.loads(body)["price"]), (200, 3530.12))
+        status, _, body = self.get("/tesouro/price/tesouro-renda-aposentadoria-extra-2065")
+        self.assertEqual((status, json.loads(body)["name"]), (200, "Tesouro RendA+ Aposentadoria Extra 2065"))
+        _, kind, body = self.get("/tesouro/history/tesouro-ipca-2035?from=2026-10-24")
+        self.assertEqual((kind, body), ("text/plain", "date;marketPrice\n2026-10-24;3530.12\n"))
+        self.assertEqual(self.get("/tesouro/price/tesouro-ipca-2099")[0], 404)
+
+    def test_ambiguous_name_lists_candidates(self):
+        csv = FIXTURE.read_text() + (
+            "Tesouro Prefixado;01/01/2010;30/12/2009;0;0;0;999,00;0\n"
+            "Tesouro Prefixado;01/07/2010;30/12/2009;0;0;0;950,00;0\n"
+        )
+        self.start(State(index=parse_csv(csv.encode())))
+        status, _, body = self.get("/tesouro/price/tesouro-prefixado-2010")
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(body)["candidates"], [
+            "/tesouro/price/tesouro-prefixado/2010-01-01",
+            "/tesouro/price/tesouro-prefixado/2010-07-01",
+        ])
 
     def test_price_errors(self):
         self.start(self.loaded())
@@ -64,9 +87,10 @@ class ServerTest(unittest.TestCase):
         bonds = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(len(bonds), 6)
-        self.assertIn({"slug": "tesouro-ipca", "name": "Tesouro IPCA+ 2035", "maturity": "2035-05-15",
+        self.assertIn({"symbol": "tesouro-ipca-2035", "name": "Tesouro IPCA+ 2035",
+                       "slug": "tesouro-ipca", "maturity": "2035-05-15",
                        "latestDate": "2026-10-24", "price": 3530.12,
-                       "priceUrl": "/tesouro/price/tesouro-ipca/2035-05-15"}, bonds)
+                       "priceUrl": "/tesouro/price/tesouro-ipca-2035"}, bonds)
 
     def test_health_ok_and_stale(self):
         self.start(self.loaded())

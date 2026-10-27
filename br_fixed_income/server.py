@@ -10,7 +10,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from br_fixed_income.tesouro.data import Bond, Index
 
-BOND_ROUTE = re.compile(r"^/tesouro/(price|history)/([a-z0-9-]+)/(\d{4}-\d{2}-\d{2})$")
+MATURITY_ROUTE = re.compile(r"^/tesouro/(price|history)/([a-z0-9-]+)/(\d{4}-\d{2}-\d{2})$")
+NAME_ROUTE = re.compile(r"^/tesouro/(price|history)/([a-z0-9-]+)$")
 
 
 class Server(ThreadingHTTPServer):
@@ -30,17 +31,26 @@ class State:
     last_error: str | None = None
 
 
-def bond_json(bond: Bond) -> dict:
+def maturity_url(bond: Bond) -> str:
+    return f"/tesouro/price/{bond.slug}/{bond.maturity.isoformat()}"
+
+
+def bond_json(bond: Bond, index: Index) -> dict:
     latest_date, price = bond.latest
-    maturity = bond.maturity.isoformat()
+    unique_name = len(index.by_name[bond.name_slug]) == 1
     return {
-        "slug": bond.slug,
+        "symbol": bond.name_slug,
         "name": bond.name,
-        "maturity": maturity,
+        "slug": bond.slug,
+        "maturity": bond.maturity.isoformat(),
         "latestDate": latest_date.isoformat(),
         "price": price,
-        "priceUrl": f"/tesouro/price/{bond.slug}/{maturity}",
+        "priceUrl": f"/tesouro/price/{bond.name_slug}" if unique_name else maturity_url(bond),
     }
+
+
+def url_part(slug: str, maturity_text: str | None) -> str:
+    return f"{slug}/{maturity_text}" if maturity_text else slug
 
 
 def make_server(state: State, port: int, max_age_days: int, today=date.today) -> Server:
@@ -67,29 +77,44 @@ def make_server(state: State, port: int, max_age_days: int, today=date.today) ->
             if url.path == "/tesouro/bonds":
                 if index is None:
                     return self.error(503, "no data yet")
-                return self.send(200, [bond_json(b) for b in index.all()])
-            match = BOND_ROUTE.match(url.path)
+                return self.send(200, [bond_json(b, index) for b in index.all()])
+            match = MATURITY_ROUTE.match(url.path) or NAME_ROUTE.match(url.path)
             if not match:
                 return self.error(404, "not found")
             if index is None:
                 return self.error(503, "no data yet")
-            kind, slug, maturity_text = match.groups()
-            try:
-                maturity = date.fromisoformat(maturity_text)
-            except ValueError:
-                return self.error(400, "maturity must be YYYY-MM-DD")
-            bond = index.get(slug, maturity)
+            kind = match.group(1)
+            bond = self.lookup(index, *match.groups()[1:])
             if bond is None:
-                return self.error(404, f"unknown bond {slug}/{maturity_text}; see /tesouro/bonds")
+                return  # lookup already answered with the error
             if kind == "price":
                 latest_date, price = bond.latest
                 return self.send(200, {
-                    "symbol": f"{slug}/{maturity_text}",
+                    "symbol": bond.name_slug,
                     "name": bond.name,
                     "date": latest_date.isoformat(),
                     "price": price,
                 })
             return self.history(bond, parse_qs(url.query).get("from", [None])[0])
+
+        def lookup(self, index: Index, slug: str, maturity_text: str | None = None) -> Bond | None:
+            """Find the bond for /<type>/<maturity> or /<name-slug>; send the error if none."""
+            if maturity_text is None:
+                try:
+                    bond = index.find(slug)
+                except LookupError as ambiguous:
+                    candidates = [maturity_url(b) for b in ambiguous.args[0]]
+                    self.send(409, {"error": f"{slug} matches several bonds", "candidates": candidates})
+                    return None
+            else:
+                try:
+                    bond = index.get(slug, date.fromisoformat(maturity_text))
+                except ValueError:
+                    self.error(400, "maturity must be YYYY-MM-DD")
+                    return None
+            if bond is None:
+                self.error(404, f"unknown bond {url_part(slug, maturity_text)}; see /tesouro/bonds")
+            return bond
 
         def history(self, bond: Bond, from_text: str | None):
             try:

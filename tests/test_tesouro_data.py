@@ -88,6 +88,25 @@ class ParseCsvTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_csv(text.encode())
 
+    def test_find_by_name_slug(self):
+        self.assertEqual(self.index.find("tesouro-ipca-2035").maturity, date(2035, 5, 15))
+        self.assertEqual(
+            self.index.find("tesouro-renda-aposentadoria-extra-2065").maturity, date(2084, 12, 15)
+        )
+        self.assertEqual(self.index.find("tesouro-ipca-2035").name_slug, "tesouro-ipca-2035")
+        self.assertIsNone(self.index.find("tesouro-ipca-2099"))
+
+    def test_find_ambiguous_name_raises(self):
+        # Before 2014 some types had two maturities in one year (e.g. Prefixado Jan/Jul 2010).
+        text = FIXTURE.read_text() + (
+            "Tesouro Prefixado;01/01/2010;30/12/2009;0;0;0;999,00;0\n"
+            "Tesouro Prefixado;01/07/2010;30/12/2009;0;0;0;950,00;0\n"
+        )
+        index = parse_csv(text.encode())
+        with self.assertRaises(LookupError) as raised:
+            index.find("tesouro-prefixado-2010")
+        self.assertEqual(len(raised.exception.args[0]), 2)
+
     def test_no_usable_rows_raises(self):
         header = FIXTURE.read_text().splitlines()[0]
         with self.assertRaises(ValueError):

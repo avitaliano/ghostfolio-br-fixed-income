@@ -58,14 +58,29 @@ class Bond:
     def latest(self) -> tuple[date, float]:
         return self.prices[-1]
 
+    @property
+    def name_slug(self) -> str:
+        """URL form of the site name: 'Tesouro IPCA+ 2035' -> 'tesouro-ipca-2035'."""
+        return slugify(self.name)
+
 
 class Index:
     def __init__(self, bonds: dict[tuple[str, date], Bond]):
         self.bonds = bonds
         self.data_date = max((b.latest[0] for b in bonds.values()), default=None)
+        self.by_name: dict[str, list[Bond]] = {}
+        for bond in bonds.values():
+            self.by_name.setdefault(bond.name_slug, []).append(bond)
 
     def get(self, slug: str, maturity: date) -> Bond | None:
         return self.bonds.get((slug, maturity))
+
+    def find(self, name_slug: str) -> Bond | None:
+        """Bond by site-name slug; raises LookupError(candidates) if the name is ambiguous."""
+        matches = self.by_name.get(name_slug, [])
+        if len(matches) > 1:
+            raise LookupError(sorted(matches, key=lambda b: b.maturity))
+        return matches[0] if matches else None
 
     def all(self) -> list[Bond]:
         return [self.bonds[key] for key in sorted(self.bonds)]
