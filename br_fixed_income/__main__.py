@@ -12,6 +12,7 @@ from br_fixed_income.tesouro.data import parse_csv
 from br_fixed_income.tesouro.source import download, load_cache, save_cache
 
 REFRESH_IF_OLDER_THAN_SECONDS = 20 * 3600
+NO_DATA_RETRY_SECONDS = 3600  # until the first successful download, don't wait for the daily run
 
 
 def log(message: str) -> None:
@@ -22,12 +23,16 @@ def refresh(state: State, cache_path: Path, fetch=download) -> None:
     try:
         raw = fetch()
         index = parse_csv(raw)  # parse before caching: never replace good data with bad
-        save_cache(cache_path, raw)
-        state.index, state.fetched_at, state.last_error = index, time.time(), None
-        log(f"refreshed: {len(index.bonds)} bonds, data date {index.data_date}")
     except Exception as error:  # keep serving the previous data
         state.last_error = f"{type(error).__name__}: {error}"
         log(f"refresh failed: {state.last_error}")
+        return
+    state.index, state.fetched_at, state.last_error = index, time.time(), None
+    log(f"refreshed: {len(index.bonds)} bonds, data date {index.data_date}")
+    try:
+        save_cache(cache_path, raw)
+    except OSError as error:  # serving works without a cache; only restarts lose it
+        log(f"cache not saved: {type(error).__name__}: {error}")
 
 
 def load_from_cache(state: State, cache_path: Path) -> float | None:
@@ -50,9 +55,15 @@ def seconds_until(hour_utc: int, now: datetime) -> float:
     return (target - now).total_seconds()
 
 
+def next_wait(state: State, hour_utc: int, now: datetime) -> float:
+    if state.index is None:
+        return NO_DATA_RETRY_SECONDS
+    return seconds_until(hour_utc, now)
+
+
 def run_daily(state: State, cache_path: Path, hour_utc: int) -> None:
     while True:
-        time.sleep(seconds_until(hour_utc, datetime.now(timezone.utc)))
+        time.sleep(next_wait(state, hour_utc, datetime.now(timezone.utc)))
         refresh(state, cache_path)
 
 

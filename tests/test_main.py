@@ -3,7 +3,13 @@ import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from br_fixed_income.__main__ import load_from_cache, refresh, seconds_until
+from br_fixed_income.__main__ import (
+    NO_DATA_RETRY_SECONDS,
+    load_from_cache,
+    next_wait,
+    refresh,
+    seconds_until,
+)
 from br_fixed_income.server import State
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.csv"
@@ -30,6 +36,22 @@ class MainTest(unittest.TestCase):
         self.assertIs(state.index, good)
         self.assertIn("missing columns", state.last_error)
         self.assertEqual(self.cache.read_bytes(), FIXTURE.read_bytes())
+
+    def test_unwritable_cache_still_serves_download(self):
+        state = State()
+        unwritable = Path("/nonexistent-dir/prices.csv")
+        refresh(state, unwritable, fetch=FIXTURE.read_bytes)
+        self.assertEqual(state.index.data_date, date(2026, 10, 24))
+        self.assertIsNone(state.last_error)
+
+    def test_retries_hourly_until_first_data(self):
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(next_wait(State(), 13, now), NO_DATA_RETRY_SECONDS)
+        loaded = State()
+        refresh(loaded, self.cache, fetch=FIXTURE.read_bytes)
+        self.assertEqual(next_wait(loaded, 13, now), 3600)
+        self.assertEqual(next_wait(loaded, 11, now), 23 * 3600)
+        self.assertEqual(NO_DATA_RETRY_SECONDS, 3600)
 
     def test_download_failure_recorded_not_raised(self):
         state = State()
