@@ -32,7 +32,27 @@ first download succeeds; `/health` shows the last error meanwhile.
 Without cloning, replace the `build: .` and `image: …` lines in `compose.yaml` with
 `image: ghcr.io/avitaliano/ghostfolio-br-fixed-income:<version>`.
 
-## Add a bond to Ghostfolio
+## Option 1: seed every bond into Ghostfolio (search by name)
+
+One command creates every currently quoted Tesouro Direto bond in Ghostfolio as a global MANUAL
+asset: name as on the Tesouro Direto site, BRL, Fixed Income / Bond, **full price history**, and the
+scraper URL already set, so prices keep updating. After that, **Add Activity → search "Tesouro IPCA"**
+finds them like any stock.
+
+```sh
+docker exec br-fixed-income python -m br_fixed_income.ghostfolio_seed \
+  | docker exec -i ghostfolio-db psql -v ON_ERROR_STOP=1 -U ghostfolio ghostfolio
+```
+
+- Back up Ghostfolio's database first. This writes its `SymbolProfile` and `MarketData` tables directly,
+  since Ghostfolio has no import path for asset profiles without activities. Written against Ghostfolio 3.93.
+- Safe to re-run (e.g. when the Tesouro issues new bonds): rows are upserted, and existing assets keep
+  their ids and your activities.
+- Add `--all` to include matured bonds, and `--base-url` if Ghostfolio reaches the service under another name.
+- Ghostfolio's search matches the **start** of the name: type `Tesouro IPCA`, not `IPCA`.
+- Symbols are `GF_` + the name-derived symbol, e.g. `GF_TESOURO-IPCA-2035`.
+
+## Option 2: add a single bond by hand
 
 Every bond has a **symbol derived from its name on the Tesouro Direto site**: lowercase, drop the
 `+`, spaces become `-`. `Tesouro IPCA+ 2035` → `tesouro-ipca-2035`, `Tesouro RendA+ Aposentadoria Extra 2065`
