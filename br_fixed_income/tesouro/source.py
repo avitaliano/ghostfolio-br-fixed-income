@@ -13,6 +13,7 @@ DATASET_ID = "df56aa42-484a-4a59-8184-7676580c81e3"
 CKAN_PACKAGE_URL = (
     "https://www.tesourotransparente.gov.br/ckan/api/3/action/package_show?id=" + DATASET_ID
 )
+CSV_NAME = "precotaxatesourodireto"
 FALLBACK_CSV_URL = (
     "https://www.tesourotransparente.gov.br/ckan/dataset/" + DATASET_ID
     + "/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/precotaxatesourodireto.csv"
@@ -34,14 +35,22 @@ def http_get(url: str) -> bytes:
 
 
 def resolve_csv_url(get=http_get) -> str:
+    """The price CSV's current URL from the dataset listing; the known URL if it can't be found."""
     try:
         package = json.loads(get(CKAN_PACKAGE_URL))
         for resource in package["result"]["resources"]:
-            if resource.get("format", "").upper() == "CSV":
-                return resource["url"]
-    except (*RETRYABLE, ValueError, KeyError, TypeError):
+            url = resource.get("url", "")
+            if resource.get("format", "").upper() == "CSV" and CSV_NAME in url.lower():
+                return url
+    except (*RETRYABLE, ValueError, KeyError, TypeError, AttributeError):
         pass
     return FALLBACK_CSV_URL
+
+
+def is_retryable(error: Exception) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code == 429 or error.code >= 500
+    return True  # timeouts, refused connections, DNS failures
 
 
 def retry_delay(error: Exception, attempt: int) -> float:
@@ -59,7 +68,7 @@ def download(get=http_get, sleep=time.sleep, attempts: int = 6) -> bytes:
         try:
             return get(url)
         except RETRYABLE as error:
-            if attempt == attempts - 1:
+            if attempt == attempts - 1 or not is_retryable(error):
                 raise
             delay = retry_delay(error, attempt)
             print(f"download failed ({error}); retrying in {delay:.0f}s", flush=True)

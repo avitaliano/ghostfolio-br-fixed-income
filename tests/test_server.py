@@ -1,3 +1,4 @@
+import io
 import json
 import threading
 import unittest
@@ -99,6 +100,30 @@ class ServerTest(unittest.TestCase):
         self.start(self.loaded(), today=date(2026, 11, 10))
         self.assertEqual(json.loads(self.get("/health")[2])["status"], "stale")
         self.assertEqual(self.get("/health")[0], 503)
+
+    def test_health_fails_on_source_format_change(self):
+        state = self.loaded()
+        state.parse_error = "ValueError: CSV is missing columns: ['PU Venda Manha']"
+        self.start(state)
+        status, _, body = self.get("/health")
+        self.assertEqual((status, json.loads(body)["status"]), (503, "source format changed"))
+        # Prices keep being served from the last good data.
+        self.assertEqual(self.get("/tesouro/price/tesouro-ipca-2035")[0], 200)
+
+    def test_successful_health_checks_are_not_logged(self):
+        self.start(self.loaded())
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.get("/health")
+            self.get("/tesouro/price/tesouro-ipca-2035")
+        log = stderr.getvalue()
+        self.assertNotIn("GET /health", log)
+        self.assertIn("GET /tesouro/price/tesouro-ipca-2035", log)
+
+    def test_failing_health_checks_are_logged(self):
+        self.start(State())
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.get("/health")
+        self.assertIn('"GET /health HTTP/1.1" 503', stderr.getvalue())
 
     def test_starts_without_reverse_dns(self):
         # HTTPServer.server_bind calls socket.getfqdn(), which hangs ~5 s with no DNS.

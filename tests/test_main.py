@@ -5,8 +5,10 @@ from pathlib import Path
 
 from br_fixed_income.__main__ import (
     NO_DATA_RETRY_SECONDS,
+    REFRESH_LOCK,
     load_from_cache,
     next_wait,
+    read_config,
     refresh,
     seconds_until,
 )
@@ -52,6 +54,39 @@ class MainTest(unittest.TestCase):
         self.assertEqual(next_wait(loaded, 13, now), 3600)
         self.assertEqual(next_wait(loaded, 11, now), 23 * 3600)
         self.assertEqual(NO_DATA_RETRY_SECONDS, 3600)
+
+    def test_schema_change_flags_parse_error_until_fixed(self):
+        state = State()
+        refresh(state, self.cache, fetch=lambda: b"Renamed;Columns\n1;2\n")
+        self.assertIn("missing columns", state.parse_error)
+        refresh(state, self.cache, fetch=FIXTURE.read_bytes)
+        self.assertIsNone(state.parse_error)
+
+    def test_network_error_is_not_a_parse_error(self):
+        state = State()
+
+        def failing():
+            raise TimeoutError("slow")
+
+        refresh(state, self.cache, fetch=failing)
+        self.assertIsNone(state.parse_error)
+
+    def test_overlapping_refresh_is_skipped(self):
+        calls = []
+        with REFRESH_LOCK:
+            refresh(State(), self.cache, fetch=lambda: calls.append(1) or FIXTURE.read_bytes())
+        self.assertEqual(calls, [])
+
+    def test_read_config_defaults(self):
+        config = read_config({})
+        self.assertEqual((config.port, config.hour_utc, config.max_age_days), (8000, 13, 5))
+        self.assertEqual(config.cache_path, Path("/data/precotaxatesourodireto.csv"))
+
+    def test_read_config_rejects_bad_values(self):
+        for env in ({"FETCH_HOUR_UTC": "24"}, {"FETCH_HOUR_UTC": "x"}, {"PORT": "0"},
+                    {"PORT": "70000"}, {"MAX_AGE_DAYS": "0"}):
+            with self.subTest(env=env), self.assertRaises(SystemExit):
+                read_config(env)
 
     def test_download_failure_recorded_not_raised(self):
         state = State()

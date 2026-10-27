@@ -29,6 +29,7 @@ class State:
     index: Index | None = None
     fetched_at: float | None = None
     last_error: str | None = None
+    parse_error: str | None = None  # the source file changed format; won't fix itself
 
 
 def maturity_url(bond: Bond) -> str:
@@ -56,6 +57,12 @@ def url_part(slug: str, maturity_text: str | None) -> str:
 def make_server(state: State, port: int, max_age_days: int, today=date.today) -> Server:
     class Handler(BaseHTTPRequestHandler):
         server_version = "br-fixed-income"
+
+        def log_request(self, code="-", size="-"):
+            # Monitors poll /health every minute; log it only when it fails.
+            if self.path == "/health" and isinstance(code, int) and code < 400:
+                return
+            super().log_request(code, size)
 
         def send(self, status: int, body, content_type="application/json"):
             text = json.dumps(body) if content_type == "application/json" else body
@@ -137,6 +144,9 @@ def make_server(state: State, port: int, max_age_days: int, today=date.today) ->
                 body["status"] = "no data"
                 return self.send(503, body)
             body.update(dataDate=index.data_date.isoformat(), bonds=len(index.bonds))
+            if state.parse_error:
+                body["status"] = "source format changed"
+                return self.send(503, body)
             if (today() - index.data_date).days > max_age_days:
                 body["status"] = "stale"
                 return self.send(503, body)

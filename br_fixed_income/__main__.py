@@ -1,8 +1,10 @@
 """Entry point: load cache, keep data fresh daily, serve HTTP."""
 
 import os
+import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13,6 +15,35 @@ from br_fixed_income.tesouro.source import download, load_cache, save_cache
 
 REFRESH_IF_OLDER_THAN_SECONDS = 20 * 3600
 NO_DATA_RETRY_SECONDS = 3600  # until the first successful download, don't wait for the daily run
+REFRESH_LOCK = threading.Lock()  # the startup refresh and the daily one must not overlap
+
+
+@dataclass(frozen=True)
+class Config:
+    port: int
+    cache_path: Path
+    hour_utc: int
+    max_age_days: int
+
+
+def env_int(env: dict, name: str, default: int, low: int, high: int) -> int:
+    text = env.get(name, str(default))
+    try:
+        value = int(text)
+    except ValueError:
+        value = None
+    if value is None or not low <= value <= high:
+        sys.exit(f"{name} must be an integer from {low} to {high}, got {text!r}")
+    return value
+
+
+def read_config(env: dict) -> Config:
+    return Config(
+        port=env_int(env, "PORT", 8000, 1, 65535),
+        cache_path=Path(env.get("CACHE_DIR", "/data")) / "precotaxatesourodireto.csv",
+        hour_utc=env_int(env, "FETCH_HOUR_UTC", 13, 0, 23),
+        max_age_days=env_int(env, "MAX_AGE_DAYS", 5, 1, 365),
+    )
 
 
 def log(message: str) -> None:
@@ -20,14 +51,30 @@ def log(message: str) -> None:
 
 
 def refresh(state: State, cache_path: Path, fetch=download) -> None:
+    if not REFRESH_LOCK.acquire(blocking=False):
+        log("refresh already running; skipped")
+        return
+    try:
+        refresh_locked(state, cache_path, fetch)
+    finally:
+        REFRESH_LOCK.release()
+
+
+def refresh_locked(state: State, cache_path: Path, fetch) -> None:
     try:
         raw = fetch()
-        index = parse_csv(raw)  # parse before caching: never replace good data with bad
-    except Exception as error:  # keep serving the previous data
+    except Exception as error:  # network trouble: keep serving the previous data
         state.last_error = f"{type(error).__name__}: {error}"
         log(f"refresh failed: {state.last_error}")
         return
-    state.index, state.fetched_at, state.last_error = index, time.time(), None
+    try:
+        index = parse_csv(raw)  # parse before caching: never replace good data with bad
+    except ValueError as error:  # the file changed format: keep serving, but alarm
+        state.last_error = state.parse_error = f"{type(error).__name__}: {error}"
+        log(f"refresh failed, source format changed: {state.parse_error}")
+        return
+    state.index, state.fetched_at = index, time.time()
+    state.last_error = state.parse_error = None
     log(f"refreshed: {len(index.bonds)} bonds, data date {index.data_date}")
     try:
         save_cache(cache_path, raw)
@@ -68,19 +115,18 @@ def run_daily(state: State, cache_path: Path, hour_utc: int) -> None:
 
 
 def main() -> None:
-    port = int(os.environ.get("PORT", "8000"))
-    cache_path = Path(os.environ.get("CACHE_DIR", "/data")) / "precotaxatesourodireto.csv"
-    hour_utc = int(os.environ.get("FETCH_HOUR_UTC", "13"))
-    max_age_days = int(os.environ.get("MAX_AGE_DAYS", "5"))
+    config = read_config(dict(os.environ))
 
     state = State()
-    age = load_from_cache(state, cache_path)
+    age = load_from_cache(state, config.cache_path)
     if age is None or age > REFRESH_IF_OLDER_THAN_SECONDS:
-        threading.Thread(target=refresh, args=(state, cache_path), daemon=True).start()
-    threading.Thread(target=run_daily, args=(state, cache_path, hour_utc), daemon=True).start()
+        threading.Thread(target=refresh, args=(state, config.cache_path), daemon=True).start()
+    threading.Thread(
+        target=run_daily, args=(state, config.cache_path, config.hour_utc), daemon=True
+    ).start()
 
-    server = make_server(state, port, max_age_days)
-    log(f"ghostfolio-br-fixed-income {__version__} listening on :{port}")
+    server = make_server(state, config.port, config.max_age_days)
+    log(f"ghostfolio-br-fixed-income {__version__} listening on :{config.port}")
     server.serve_forever()
 
 
