@@ -10,6 +10,9 @@ services:
     container_name: br-fixed-income
     restart: unless-stopped
     read_only: true
+    environment:
+      FETCH_HOUR_UTC: ${FETCH_HOUR_UTC:-13}
+      MAX_AGE_DAYS: ${MAX_AGE_DAYS:-5}
     volumes:
       - cache:/data
     networks: [ghostfolio]

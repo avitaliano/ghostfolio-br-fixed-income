@@ -117,10 +117,16 @@ outages keep serving prices.
 | Env var | Default | Meaning |
 |---|---|---|
 | `GHOSTFOLIO_NETWORK` | `ghostfolio_default` | Docker network shared with Ghostfolio (compose only) |
-| `PORT` | `8000` | HTTP port inside the container |
-| `FETCH_HOUR_UTC` | `13` | daily download time (the dataset updates around 10:20 UTC) |
+| `FETCH_HOUR_UTC` | `13` | daily download hour, 0–23 (the dataset updates around 10:20 UTC) |
 | `MAX_AGE_DAYS` | `5` | `/health` reports `stale` beyond this (covers long weekends) |
-| `CACHE_DIR` | `/data` | where the last good CSV is kept |
+| `PORT` | `8000` | HTTP port inside the container (not in `compose.yaml`; changing it changes every URL) |
+| `CACHE_DIR` | `/data` | where the last good CSV is kept (not in `compose.yaml`) |
+
+`compose.yaml` passes `FETCH_HOUR_UTC` and `MAX_AGE_DAYS` through, e.g.
+`FETCH_HOUR_UTC=11 docker compose up -d`. Invalid values stop the container at startup with a message.
+
+`/health` also answers `503` with `"status": "source format changed"` when the government file stops
+parsing (e.g. a renamed column). Prices keep being served from the last good file meanwhile.
 
 ## Security
 
