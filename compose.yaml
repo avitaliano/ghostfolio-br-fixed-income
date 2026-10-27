@@ -1,0 +1,30 @@
+# Run next to an existing Ghostfolio: docker compose up -d
+# GHOSTFOLIO_NETWORK = the Docker network your Ghostfolio container is on
+# (docker inspect ghostfolio -f '{{json .NetworkSettings.Networks}}').
+name: br-fixed-income
+
+services:
+  br-fixed-income:
+    build: .
+    image: ghostfolio-br-fixed-income:local
+    container_name: br-fixed-income
+    restart: unless-stopped
+    read_only: true
+    volumes:
+      - cache:/data
+    networks: [ghostfolio]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    # No ports: Ghostfolio reaches it as http://br-fixed-income:8000 on the shared network.
+
+volumes:
+  cache:
+
+networks:
+  ghostfolio:
+    external: true
+    name: ${GHOSTFOLIO_NETWORK:-ghostfolio_default}

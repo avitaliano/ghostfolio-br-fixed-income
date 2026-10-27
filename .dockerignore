@@ -1,0 +1,8 @@
+.git
+.github
+.superpowers
+tests
+__pycache__
+*.md
+test.sh
+compose*.yaml
