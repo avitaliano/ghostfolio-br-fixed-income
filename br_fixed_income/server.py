@@ -2,6 +2,7 @@
 
 import json
 import re
+import socketserver
 from dataclasses import dataclass
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +11,16 @@ from urllib.parse import parse_qs, urlsplit
 from br_fixed_income.tesouro.data import Bond, Index
 
 BOND_ROUTE = re.compile(r"^/tesouro/(price|history)/([a-z0-9-]+)/(\d{4}-\d{2}-\d{2})$")
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def server_bind(self):
+        # Skip HTTPServer.server_bind's socket.getfqdn(): a reverse DNS lookup that delays
+        # listening by ~5 s when DNS is unavailable.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 @dataclass
@@ -32,7 +43,7 @@ def bond_json(bond: Bond) -> dict:
     }
 
 
-def make_server(state: State, port: int, max_age_days: int, today=date.today) -> ThreadingHTTPServer:
+def make_server(state: State, port: int, max_age_days: int, today=date.today) -> Server:
     class Handler(BaseHTTPRequestHandler):
         server_version = "br-fixed-income"
 
@@ -106,4 +117,4 @@ def make_server(state: State, port: int, max_age_days: int, today=date.today) ->
                 return self.send(503, body)
             self.send(200, body)
 
-    return ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    return Server(("0.0.0.0", port), Handler)

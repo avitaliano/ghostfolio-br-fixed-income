@@ -5,6 +5,7 @@ import urllib.error
 import urllib.request
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from br_fixed_income.server import State, make_server
 from br_fixed_income.tesouro.data import parse_csv
@@ -74,6 +75,12 @@ class ServerTest(unittest.TestCase):
         self.start(self.loaded(), today=date(2026, 11, 10))
         self.assertEqual(json.loads(self.get("/health")[2])["status"], "stale")
         self.assertEqual(self.get("/health")[0], 503)
+
+    def test_starts_without_reverse_dns(self):
+        # HTTPServer.server_bind calls socket.getfqdn(), which hangs ~5 s with no DNS.
+        with patch("socket.getfqdn", side_effect=AssertionError("reverse DNS lookup")):
+            server = make_server(State(), 0, max_age_days=5)
+        server.server_close()
 
     def test_no_data_yet(self):
         self.start(State(last_error="HTTPError: 429"))

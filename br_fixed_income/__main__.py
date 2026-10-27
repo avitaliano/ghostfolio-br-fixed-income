@@ -68,8 +68,9 @@ def main() -> None:
         threading.Thread(target=refresh, args=(state, cache_path), daemon=True).start()
     threading.Thread(target=run_daily, args=(state, cache_path, hour_utc), daemon=True).start()
 
+    server = make_server(state, port, max_age_days)
     log(f"ghostfolio-br-fixed-income {__version__} listening on :{port}")
-    make_server(state, port, max_age_days).serve_forever()
+    server.serve_forever()
 
 
 if __name__ == "__main__":
